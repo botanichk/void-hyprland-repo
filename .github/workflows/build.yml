@@ -16,11 +16,15 @@ jobs:
       options: --privileged
 
     steps:
+      # 🔹 САМОЕ ВАЖНОЕ: ставим gcc-libs сразу, до любых других действий
+      - name: Fix container libs for GitHub runner
+        run: xbps-install -Sy --no-progress gcc-libs
+
       - name: Checkout repo
         uses: actions/checkout@v6
 
-      - name: Install deps
-        run: xbps-install -Syu xbps git curl jq gnupg gcc-libs
+      - name: Install build deps
+        run: xbps-install -Syu xbps git curl jq gnupg
 
       - name: Get latest Hyprland version
         id: upstream
