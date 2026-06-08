@@ -22,7 +22,7 @@ jobs:
         run: |
           xbps-install -Syu xbps
           xbps-install -Syu git curl jq gnupg
-
+          xbps-install -Syu git curl jq gnupg gcc-libs
       - name: Get latest Hyprland version
         id: upstream
         run: |
