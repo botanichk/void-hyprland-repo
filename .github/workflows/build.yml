@@ -1,62 +1,67 @@
-name: "Build Latest Packages"
+name: Build Hyprland for Void Linux
 
 on:
-  push:
-    branches:
-      - master
+  schedule:
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build Hyprland
+    name: Build Hyprland x86_64
     runs-on: ubuntu-latest
-
     container:
       image: ghcr.io/void-linux/void-glibc-full:20250227R1
       options: --platform linux/amd64 --privileged
 
-    strategy:
-      matrix:
-        arch: [ x86_64, x86_64-musl, aarch64, aarch64-musl ]
-    env:
-      REPO_OWNER: "${{ github.repository_owner }}"
-      REPO_NAME: "${{ github.event.repository.name }}"
-      TARGET_ARCH: "${{ matrix.arch }}"
-      SCRIPT_DIR: "/work/${{ github.event.repository.name }}/scripts"
-      BUILD_ARGS: ""
-
     steps:
-      - name: Prepare container and create non-root user
+      - name: Prepare container
         run: |
           mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
           sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
-          xbps-install -Syu xbps && xbps-install -yu && xbps-install -y sudo bash grep curl git kotlin-bin
-          useradd -G xbuilder -M builder
+          xbps-install -Syu xbps
+          xbps-install -yu
+          xbps-install -y sudo bash git curl jq gnupg gcc-libs
 
-      - name: Clone hyprland-void repo
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Get latest Hyprland version
+        id: upstream
         run: |
-          mkdir /work && cd /work
-          git clone https://github.com/$REPO_OWNER/$REPO_NAME.git
-          $SCRIPT_DIR/set-environment
+          VER=$(curl -s https://api.github.com/repos/hyprwm/Hyprland/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          echo "version=$VER" >> $GITHUB_OUTPUT
 
-      - name: Automatically generate a build order
-        run: $SCRIPT_DIR/generate-build-order.kts
-
-      - name: Prepare void-packages
-        run: $SCRIPT_DIR/clone-and-prepare
-
-      - name: Build packages
-        run: $SCRIPT_DIR/build-packages
-
-      - name: Copy relevant packages for indexing and signing
+      - name: Update template
         run: |
-          export PEM_PAT=${{ secrets.PEM_PAT }}
-          export XBPS_PASSPHRASE=${{ secrets.PRIVATE_PEM_PASSPHRASE }}
-          export XBPS_TARGET_ARCH=${{ env.TARGET_ARCH }}
-          sudo -Eu builder $SCRIPT_DIR/index-packages
-          sudo -Eu builder $SCRIPT_DIR/sign-packages
+          VER="${{ steps.upstream.outputs.version }}"
+          URL="https://github.com/hyprwm/Hyprland/archive/refs/tags/v${VER}.tar.gz"
+          SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          sed -i "s/^version=.*/version=${VER}/" srcpkgs/hyprland/template
+          sed -i "s/^checksum=.*/checksum=${SHA}/" srcpkgs/hyprland/template
 
-      - name: Push new packages to binary repository
+      - name: Clone void-packages
+        run: git clone --depth=1 https://github.com/void-linux/void-packages /void-packages
+
+      - name: Copy our templates
+        run: cp -r srcpkgs/* /void-packages/srcpkgs/
+
+      - name: Bootstrap
+        run: cd /void-packages && ./xbps-src binary-bootstrap
+
+      - name: Build hyprland
+        run: cd /void-packages && ./xbps-src pkg hyprland
+
+      - name: Prepare repo
         run: |
-          export ACCESS_GIT=${{ secrets.ACCESS_GIT }}
-          sudo -Eu builder $SCRIPT_DIR/push-repository
+          VER="${{ steps.upstream.outputs.version }}"
+          mkdir -p x86_64
+          cp /void-packages/hostdir/binpkgs/hyprland-${VER}*.xbps x86_64/ || true
+          xbps-rindex -a x86_64/*.xbps
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add x86_64/
+          git commit -m "hyprland ${{ steps.upstream.outputs.version }}" || true
+          git push
