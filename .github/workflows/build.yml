@@ -34,9 +34,13 @@ jobs:
       - name: Check current version in repo
         id: current
         run: |
-          CURRENT=$(ls x86_64/hyprland-[0-9]*.xbps 2>/dev/null \
-            | grep -oP '(?<=hyprland-)\d+\.\d+\.\d+' \
-            | sort -V | tail -1 || echo "0.0.0")
+          if [ -d "x86_64" ] && ls x86_64/hyprland-[0-9]*.xbps 1> /dev/null 2>&1; then
+            CURRENT=$(ls x86_64/hyprland-[0-9]*.xbps \
+              | grep -oP '(?<=hyprland-)\d+\.\d+\.\d+' \
+              | sort -V | tail -1)
+          else
+            CURRENT="0.0.0"
+          fi
           echo "version=$CURRENT" >> $GITHUB_OUTPUT
           echo "Current version: $CURRENT"
 
@@ -57,6 +61,15 @@ jobs:
         if: steps.compare.outputs.skip == 'false'
         run: |
           git clone --depth=1 https://github.com/void-linux/void-packages /void-packages
+
+      - name: Check if Hyprland template exists
+        if: steps.compare.outputs.skip == 'false'
+        run: |
+          if [ ! -f "/void-packages/srcpkgs/hyprland/template" ]; then
+            echo "Hyprland template not found in void-packages"
+            echo "skip=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
       - name: Bootstrap xbps-src
         if: steps.compare.outputs.skip == 'false'
@@ -92,8 +105,11 @@ jobs:
         if: steps.compare.outputs.skip == 'false'
         run: |
           VERSION="${{ steps.upstream.outputs.version }}"
+          mkdir -p x86_64
           cp /void-packages/hostdir/binpkgs/hyprland-${VERSION}*.xbps x86_64/
-          ls x86_64/hyprland-[0-9]*.xbps | sort -V | head -n -1 | xargs rm -f || true
+          if ls x86_64/hyprland-[0-9]*.xbps 1> /dev/null 2>&1; then
+            ls x86_64/hyprland-[0-9]*.xbps | sort -V | head -n -1 | xargs rm -f || true
+          fi
           rm -f x86_64/*.plist x86_64/*.plist.sig2
           xbps-rindex -a x86_64/*.xbps
           xbps-rindex --sign \
