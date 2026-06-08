@@ -12,6 +12,15 @@ jobs:
       run:
         shell: bash
     container:
+      # ВАЖНО: latest-full-x86_64 в реестре Void = musl.
+      # actions/checkout@v4 (Node.js action) ломается в musl-контейнере,
+      # потому что runner прокидывает glibc-билд node, а musl с ним несовместим.
+      #
+      # Вариант 1 (glibc) — тег от 2022-02-07, может быть слишком стар для Hyprland:
+      # image: ghcr.io/void-linux/void-linux:20220207RC01-full-x86_64
+      #
+      # Вариант 2 (musl + nodejs) — наиболее рабочий. Nodejs ставится в контейнер,
+      # и runner подхватывает его из PATH:
       image: ghcr.io/void-linux/void-linux:latest-full-x86_64
       options: --privileged
 
@@ -21,8 +30,10 @@ jobs:
 
       - name: Install deps
         run: |
-          xbps-install -Syu xbps
-          xbps-install -Syu git curl jq gnupg gcc-libs
+          xbps-install -Syu
+          # Если используем musl — обязательно добавляем nodejs,
+          # иначе actions/checkout@v4 упадёт (см. комментарий выше).
+          xbps-install -Sy nodejs git curl jq gnupg gcc-libs
 
       - name: Get latest Hyprland version
         id: upstream
@@ -59,21 +70,27 @@ jobs:
         if: steps.compare.outputs.skip == 'false'
         run: git clone --depth=1 https://github.com/void-linux/void-packages /void-packages
 
+      # ⚠️ ВАЖНО: в upstream void-packages НЕТ srcpkgs/hyprland/template!
+      # Шаблон был удалён. Этот шаг теперь падает с ошибкой,
+      # чтобы ты сразу увидел проблему.
+      # Решение: форкнуть void-packages с шаблоном, либо положить template в этот репо.
       - name: Check Hyprland template
+        id: check_tmpl
         if: steps.compare.outputs.skip == 'false'
         run: |
           if [ ! -f "/void-packages/srcpkgs/hyprland/template" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "::error::Hyprland template not found in void-packages. Fork void-packages or include template in this repo."
+            exit 1
           fi
 
       - name: Bootstrap xbps-src
-        if: steps.compare.outputs.skip == 'false'
+        if: steps.compare.outputs.skip == 'false' && steps.check_tmpl.conclusion == 'success'
         run: |
           cd /void-packages
           ./xbps-src binary-bootstrap
 
       - name: Update hyprland template
-        if: steps.compare.outputs.skip == 'false'
+        if: steps.compare.outputs.skip == 'false' && steps.check_tmpl.conclusion == 'success'
         run: |
           cd /void-packages
           VERSION="${{ steps.upstream.outputs.version }}"
@@ -83,17 +100,20 @@ jobs:
           sed -i "s/^checksum=.*/checksum=${SHA256}/" srcpkgs/hyprland/template
 
       - name: Build hyprland
-        if: steps.compare.outputs.skip == 'false'
+        if: steps.compare.outputs.skip == 'false' && steps.check_tmpl.conclusion == 'success'
         run: |
           cd /void-packages
           ./xbps-src pkg hyprland
 
+      # ⚠️ GitHub Secrets режет переводы строк в многострочных значениях.
+      # GPG-ключ без переводов строк — мусор. Кодируй секрет в base64 при сохранении,
+      # а тут декодируем обратно.
       - name: Import GPG key
-        if: steps.compare.outputs.skip == 'false'
-        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
+        if: steps.compare.outputs.skip == 'false' && steps.check_tmpl.conclusion == 'success'
+        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | base64 -d | gpg --batch --import
 
       - name: Index and sign packages
-        if: steps.compare.outputs.skip == 'false'
+        if: steps.compare.outputs.skip == 'false' && steps.check_tmpl.conclusion == 'success'
         run: |
           VERSION="${{ steps.upstream.outputs.version }}"
           mkdir -p x86_64
@@ -104,11 +124,13 @@ jobs:
           rm -f x86_64/*.plist x86_64/*.plist.sig2
           xbps-rindex -a x86_64/*.xbps
           gpg --armor --export-secret-keys "${{ secrets.GPG_KEY_ID }}" > /tmp/key.asc
-          xbps-rindex --sign --signedby "botanichk" --privkey /tmp/key.asc x86_64/
+          # --signedby должен быть UID/email из GPG-ключа, а не юзернейм.
+          # Подставь сюда правильное значение (например "Your Name <you@example.com>").
+          xbps-rindex --sign --signedby "${{ secrets.GPG_KEY_ID }}" --privkey /tmp/key.asc x86_64/
           rm -f /tmp/key.asc
 
       - name: Commit and push
-        if: steps.compare.outputs.skip == 'false'
+        if: steps.compare.outputs.skip == 'false' && steps.check_tmpl.conclusion == 'success'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
