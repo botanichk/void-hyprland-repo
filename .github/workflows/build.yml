@@ -16,9 +16,18 @@ jobs:
     steps:
       - name: Prepare container
         run: |
-          xbps-install -Syu xbps
-          xbps-install -Sy --no-progress --ignore-conflicts \
-            git curl jq gnupg sudo bash grep gcc-libs
+          # 1. Инициализация репозиториев (копируем конфиги)
+          mkdir -p /etc/xbps.d
+          cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
+          
+          # 2. Синхронизируем списки пакетов (ждем сеть)
+          xbps-install -S
+          
+          # 3. Обновляем сам менеджер пакетов
+          xbps-install -y -u xbps
+          
+          # 4. Устанавливаем инструменты для сборки
+          xbps-install -y git curl jq gnupg sudo bash grep gcc-libs
 
       - name: Checkout repo
         uses: actions/checkout@v6
