@@ -16,11 +16,9 @@ jobs:
     steps:
       - name: Prepare container
         run: |
-          mkdir -p /etc/xbps.d && cp /usr/share/xbps.d/*-repository-*.conf /etc/xbps.d/
-          sed -i 's|repo-default|repo-ci|g' /etc/xbps.d/*-repository-*.conf
           xbps-install -Syu xbps
-          xbps-install -yu
-          xbps-install -y sudo bash git curl jq gnupg gcc-libs
+          xbps-install -Sy --no-progress --ignore-conflicts \
+            git curl jq gnupg sudo bash grep gcc-libs
 
       - name: Checkout repo
         uses: actions/checkout@v6
