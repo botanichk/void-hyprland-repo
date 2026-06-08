@@ -20,95 +20,42 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Install deps
-        run: |
-          xbps-install -Syu xbps
-          xbps-install -Syu git curl jq gnupg gcc-libs
+        run: xbps-install -Syu xbps git curl jq gnupg gcc-libs
 
       - name: Get latest Hyprland version
         id: upstream
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/hyprwm/Hyprland/releases/latest \
-            | jq -r '.tag_name' | sed 's/^v//')
-          echo "version=$LATEST" >> $GITHUB_OUTPUT
+          VER=$(curl -s https://api.github.com/repos/hyprwm/Hyprland/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          echo "version=$VER" >> $GITHUB_OUTPUT
 
-      - name: Check current version in repo
-        id: current
+      - name: Update template version
         run: |
-          if [ -d "x86_64" ] && ls x86_64/hyprland-[0-9]*.xbps 1> /dev/null 2>&1; then
-            CURRENT=$(ls x86_64/hyprland-[0-9]*.xbps \
-              | grep -Eo 'hyprland-[0-9]+\.[0-9]+\.[0-9]+' \
-              | sed 's/hyprland-//' \
-              | sort -V | tail -1)
-          else
-            CURRENT="0.0.0"
-          fi
-          echo "version=$CURRENT" >> $GITHUB_OUTPUT
-
-      - name: Compare versions
-        id: compare
-        run: |
-          UP="${{ steps.upstream.outputs.version }}"
-          CUR="${{ steps.current.outputs.version }}"
-          if [ "$UP" = "$CUR" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-          fi
+          VER="${{ steps.upstream.outputs.version }}"
+          URL="https://github.com/hyprwm/Hyprland/archive/refs/tags/v${VER}.tar.gz"
+          SHA=$(curl -sL "$URL" | sha256sum | cut -d' ' -f1)
+          sed -i "s/^version=.*/version=${VER}/" srcpkgs/hyprland/template
+          sed -i "s/^checksum=.*/checksum=${SHA}/" srcpkgs/hyprland/template
 
       - name: Clone void-packages
-        if: steps.compare.outputs.skip == 'false'
         run: git clone --depth=1 https://github.com/void-linux/void-packages /void-packages
 
-      - name: Check Hyprland template
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          if [ ! -f "/void-packages/srcpkgs/hyprland/template" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-          fi
+      - name: Copy our templates
+        run: cp -r srcpkgs/* /void-packages/srcpkgs/
 
-      - name: Bootstrap xbps-src
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          cd /void-packages
-          ./xbps-src binary-bootstrap
-
-      - name: Update hyprland template
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          cd /void-packages
-          VERSION="${{ steps.upstream.outputs.version }}"
-          TARBALL_URL="https://github.com/hyprwm/Hyprland/archive/refs/tags/v${VERSION}.tar.gz"
-          SHA256=$(curl -sL "$TARBALL_URL" | sha256sum | cut -d' ' -f1)
-          sed -i "s/^version=.*/version=${VERSION}/" srcpkgs/hyprland/template
-          sed -i "s/^checksum=.*/checksum=${SHA256}/" srcpkgs/hyprland/template
+      - name: Bootstrap
+        run: cd /void-packages && ./xbps-src binary-bootstrap
 
       - name: Build hyprland
-        if: steps.compare.outputs.skip == 'false'
-        run: |
-          cd /void-packages
-          ./xbps-src pkg hyprland
+        run: cd /void-packages && ./xbps-src pkg hyprland
 
-      - name: Import GPG key
-        if: steps.compare.outputs.skip == 'false'
-        run: echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-
-      - name: Index and sign packages
-        if: steps.compare.outputs.skip == 'false'
+      - name: Prepare repo
         run: |
-          VERSION="${{ steps.upstream.outputs.version }}"
+          VER="${{ steps.upstream.outputs.version }}"
           mkdir -p x86_64
-          cp /void-packages/hostdir/binpkgs/hyprland-${VERSION}*.xbps x86_64/ || true
-          if ls x86_64/hyprland-[0-9]*.xbps 1> /dev/null 2>&1; then
-            ls x86_64/hyprland-[0-9]*.xbps | sort -V | head -n -1 | xargs rm -f || true
-          fi
-          rm -f x86_64/*.plist x86_64/*.plist.sig2
+          cp /void-packages/hostdir/binpkgs/hyprland-${VER}*.xbps x86_64/ || true
           xbps-rindex -a x86_64/*.xbps
-          gpg --armor --export-secret-keys "${{ secrets.GPG_KEY_ID }}" > /tmp/key.asc
-          xbps-rindex --sign --signedby "botanichk" --privkey /tmp/key.asc x86_64/
-          rm -f /tmp/key.asc
 
       - name: Commit and push
-        if: steps.compare.outputs.skip == 'false'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
